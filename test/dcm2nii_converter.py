@@ -80,5 +80,5 @@ class DCM2NIIConverter:
 
 
 if __name__ == '__main__':
-    input_dir = r'D:\DATASET\Breast_MRI_test'
+    input_dir = '/mnt/nasw337n2/junsu_work/DATASET/Breast-MRI/Breast_Cancer_MRI'
     DCM2NIIConverter(input_dir).main()
