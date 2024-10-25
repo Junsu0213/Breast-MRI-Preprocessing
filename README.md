@@ -128,8 +128,3 @@ The pipeline supports different registration types:
 - All images are normalized to the range [0,1]
 - DWI sequences are automatically sorted by b-values
 - Progress bars show processing status for each step
-
-
-## Contact
-
-[Add your contact information]
