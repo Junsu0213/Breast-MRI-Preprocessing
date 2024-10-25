@@ -284,7 +284,7 @@ class Coregistration:
                     src_path = os.path.join(input_patient_dir, reference_file)
                     dst_path = os.path.join(output_patient_type_dir, reference_file)
                     shutil.copy2(src_path, dst_path)
-                    print(f"Copied reference file for {patient} to output directory")
+                    # print(f"Copied reference file for {patient} to output directory")
 
                 # Process fixed (reference) image
                 try:
