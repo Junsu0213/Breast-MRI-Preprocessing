@@ -1,8 +1,9 @@
 # -*- coding:utf-8 -*-
 """
+Created on Thu. Oct. 31 10:14:31 2024
+@author: JUN-SU PARK
+
 MRI Data Preprocessing Utilities
-Author: JUN-SU PARK
-Date: Oct 2024
 
 This module provides utilities for:
 1. Converting DICOM files to NIfTI format
@@ -216,6 +217,20 @@ class Coregistration:
             )
             transforms.append(affine_tx['fwdtransforms'][0])
 
+        if registration_type in 'nonlinear':
+            nonlinear_tx = ants.registration(
+                fixed=fixed,
+                moving=moving,
+                type_of_transform='SyN',
+                grad_step=0.01,
+                reg_iterations=(10, 10, 5, 5),
+                convergence_threshold=1e-05,
+                convergence_window_size=3,
+                shrink_factors=(1, 1, 1, 1),
+                smoothing_sigmas=(0, 0, 0, 0)
+            )
+            transforms.append(nonlinear_tx['fwdtransforms'][0])
+
         if transforms:
             return ants.apply_transforms(
                 fixed=fixed,
@@ -335,3 +350,4 @@ if __name__ == '__main__':
     # coregistration.process_all(registration_type='both')  # For both rigid and affine
     # coregistration.process_all(registration_type='rigid')  # For rigid only
     # coregistration.process_all(registration_type='affine')  # For affine only
+    # coregistration.process_all(registration_type='nonlinear')  # For nonlinear only
