@@ -16,7 +16,7 @@ import shutil
 import pydicom
 import SimpleITK as sitk
 from tqdm import tqdm
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple, Any
 from ants.core.ants_image import ANTsImage
 
 
@@ -141,6 +141,11 @@ class Coregistration:
         'T2WI.nii.gz': 'T2FS_wm.nii.gz'
     }
 
+    DWI_SEQUENCES = [
+        'DWI_b0.nii.gz', 'DWI_b800.nii.gz', 'DWI_b1200.nii.gz',
+        'ADC map.nii.gz', 'ADC_map.nii.gz'
+    ]
+
     def __init__(self, output_dir: Optional[str] = None):
         """
         Initialize coregistration processor.
@@ -171,21 +176,21 @@ class Coregistration:
             direction=image.direction
         )
 
-    def register_images(self, fixed: ANTsImage, moving: ANTsImage,
-                        registration_type: Optional[str] = None) -> ANTsImage:
+    @staticmethod
+    def get_transforms(fixed: ANTsImage, moving: ANTsImage,
+                       registration_type: Optional[str] = None) -> List[str]:
         """
-        Perform image registration based on specified type.
+        Generate transformation files based on registration type.
 
         Args:
             fixed: Reference image
             moving: Image to be registered
             registration_type: Type of registration ('rigid', 'affine', 'both', or None)
-                             If None, returns the moving image without registration
         Returns:
-            Registered image (or original image if no registration requested)
+            List of transformation file paths
         """
         if not registration_type:
-            return moving
+            return []
 
         transforms = []
 
@@ -217,7 +222,7 @@ class Coregistration:
             )
             transforms.append(affine_tx['fwdtransforms'][0])
 
-        if registration_type in 'nonlinear':
+        if registration_type == 'nonlinear':
             nonlinear_tx = ants.registration(
                 fixed=fixed,
                 moving=moving,
@@ -231,6 +236,21 @@ class Coregistration:
             )
             transforms.append(nonlinear_tx['fwdtransforms'][0])
 
+        return transforms
+
+    @staticmethod
+    def apply_transforms(fixed: ANTsImage, moving: ANTsImage,
+                         transforms: List[str]) -> ANTsImage:
+        """
+        Apply pre-computed transformations to an image.
+
+        Args:
+            fixed: Reference image
+            moving: Image to be transform
+            transforms: List of transformation file paths
+        Returns:
+            Transformed image
+        """
         if transforms:
             return ants.apply_transforms(
                 fixed=fixed,
@@ -240,7 +260,7 @@ class Coregistration:
         return moving
 
     def process_sequence(self, fixed_img: ANTsImage, moving_img: ANTsImage,
-                         output_path: str, registration_type: Optional[str] = None) -> None:
+                         output_path: str, transforms: Optional[List[str]] = None) -> None:
         """
         Process a single MRI sequence.
 
@@ -248,7 +268,7 @@ class Coregistration:
             fixed_img: Reference image
             moving_img: Image to be processed
             output_path: Path for output file
-            registration_type: Type of registration (None, 'rigid', 'affine', or 'both')
+            transforms: Optional list of pre-computed transformations
         """
         # Normalize images
         norm_moving = self.normalize_image(moving_img)
@@ -260,14 +280,15 @@ class Coregistration:
             use_voxels=True
         )
 
-        # Perform registration if requested
-        final_img = self.register_images(fixed_img, interp_moving, registration_type)
+        # Apply transforms if provided
+        final_img = self.apply_transforms(fixed_img, interp_moving, transforms or [])
 
         ants.image_write(final_img, output_path)
 
     def process_all(self, registration_type: Optional[str] = None) -> None:
         """
         Process all sequences for all patients and copy reference CE MRI files.
+        Uses a single transformation for all DWI-related sequences.
 
         Args:
             registration_type: Type of registration to apply (None, 'rigid', 'affine', or 'both')
@@ -299,7 +320,6 @@ class Coregistration:
                     src_path = os.path.join(input_patient_dir, reference_file)
                     dst_path = os.path.join(output_patient_type_dir, reference_file)
                     shutil.copy2(src_path, dst_path)
-                    # print(f"Copied reference file for {patient} to output directory")
 
                 # Process fixed (reference) image
                 try:
@@ -313,7 +333,16 @@ class Coregistration:
                     os.path.join(input_patient_type_dir, f'{patient}_T1FS_wm.nii.gz')
                 )
 
-                # Process other sequences
+                # Generate transforms using first DWI sequence found
+                dwi_transforms = None
+                first_dwi = None
+                for sequence in os.listdir(input_patient_dir):
+                    if sequence in self.DWI_SEQUENCES:
+                        first_dwi = ants.image_read(os.path.join(input_patient_dir, sequence))
+                        dwi_transforms = self.get_transforms(norm_fixed, first_dwi, registration_type)
+                        break
+
+                # Process sequences
                 for sequence in os.listdir(input_patient_dir):
                     if (sequence.startswith('FS T1WI') or
                             sequence.startswith('FS_T1WI') or
@@ -326,7 +355,12 @@ class Coregistration:
                     output_name = self.SEQUENCE_MAPPING.get(sequence, sequence)
                     output_path = os.path.join(input_patient_type_dir, f'{patient}_{output_name}')
 
-                    self.process_sequence(norm_fixed, moving_img, output_path, registration_type)
+                    # Use DWI transforms for DWI-related sequences, otherwise compute new transforms
+                    if sequence in self.DWI_SEQUENCES and dwi_transforms is not None:
+                        self.process_sequence(norm_fixed, moving_img, output_path, dwi_transforms)
+                    else:
+                        transforms = self.get_transforms(norm_fixed, moving_img, registration_type)
+                        self.process_sequence(norm_fixed, moving_img, output_path, transforms)
 
         # Clean up temporary directory
         shutil.rmtree(input_dir)
@@ -336,15 +370,15 @@ class Coregistration:
 if __name__ == '__main__':
     # Example usage
     input_dir = r'D:\DATASET\Breast_MRI\Breast_Cancer_MRI'
-    output_dir = r'C:\Users\BMC\Desktop\CE Dataset'
+    output_dir = r'C:\Users\BMC\Desktop\CE_Dataset'
 
     # Convert DICOM to NIfTI
     converter = DCM2NIIConverter(input_dir)
     converter.convert_all()
 
     # Perform coregistration without registration (interpolation only)
-    coregistration = Coregistration(output_dir)
-    coregistration.process_all()  # Default: no registration
+    # coregistration = Coregistration(output_dir)
+    # coregistration.process_all()  # Default: no registration
 
     # Or with specific registration type if needed:
     # coregistration.process_all(registration_type='both')  # For both rigid and affine
