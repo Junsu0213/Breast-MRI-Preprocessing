@@ -95,8 +95,9 @@ pip install -r requirements.txt
 ## Usage
 
 Basic usage:
+
 ```python
-from mri_preprocessing import DCM2NIIConverter, Coregistration
+from mri_preprocessing_ver_01 import DCM2NIIConverter, Coregistration
 
 # Convert DICOM to NIfTI
 input_dir = '/path/to/dicom/data'

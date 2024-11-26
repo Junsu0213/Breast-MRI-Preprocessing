@@ -369,7 +369,7 @@ class Coregistration:
 
 if __name__ == '__main__':
     # Example usage
-    input_dir = r'D:\DATASET\Breast_MRI\Breast_Cancer_MRI'
+    input_dir = r'D:\DATASET\MRI_CE\Test_dataset'
     output_dir = r'C:\Users\BMC\Desktop\CE_Dataset'
 
     # Convert DICOM to NIfTI
@@ -377,11 +377,11 @@ if __name__ == '__main__':
     converter.convert_all()
 
     # Perform coregistration without registration (interpolation only)
-    # coregistration = Coregistration(output_dir)
+    coregistration = Coregistration(output_dir)
     # coregistration.process_all()  # Default: no registration
 
     # Or with specific registration type if needed:
     # coregistration.process_all(registration_type='both')  # For both rigid and affine
     # coregistration.process_all(registration_type='rigid')  # For rigid only
     # coregistration.process_all(registration_type='affine')  # For affine only
-    # coregistration.process_all(registration_type='nonlinear')  # For nonlinear only
+    coregistration.process_all(registration_type='nonlinear')  # For nonlinear only
