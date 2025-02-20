@@ -35,7 +35,7 @@ import pandas as pd
 import SimpleITK as sitk
 from scipy.stats import pearsonr
 from sklearn.metrics import mean_squared_error
-from skimage.metrics import structural_similarity
+from skimage.metrics import structural_similarity, normalized_mutual_information, normalized_root_mse
 import matplotlib.pyplot as plt
 
 
@@ -148,6 +148,14 @@ class ImageEvaluation:
         else:
             raise ValueError("Unsupported normalization method. Choose from 'min_max', 'z_score', 'unit_norm', 'histogram_matching'")
 
+    @staticmethod
+    def scale12bit(img):
+        # constants
+        new_mean = 2048.
+        new_std = 400.
+
+        return np.clip(((img - np.mean(img)) / (np.std(img) / new_std)) + new_mean, 1e-10, 4095)
+
     def calculate_cc(self):
         """
         Calculate Cross Correlation using Pearson correlation coefficient
@@ -157,7 +165,10 @@ class ImageEvaluation:
         float
             Cross correlation value between -1 and 1
         """
-        return pearsonr(self.img1_np.flatten(), self.img2_np.flatten())[0]
+        img1_scaled = self.scale12bit(self.img1_np) # scale to 12 bit range
+        img2_scaled = self.scale12bit(self.img2_np) # scale to 12 bit range
+
+        return pearsonr(img1_scaled.flatten(), img2_scaled.flatten())[0]
     
     def calculate_mi(self):
         """
@@ -166,21 +177,18 @@ class ImageEvaluation:
         Returns:
         --------
         float
-            Mutual information value
+            Mutual information value between 0 and 1
+        
+        Note:
+        -----
+        It was proposed to be useful in registering images by Colin Studholme and colleagues.
+        It ranges from 0 (perfectly uncorrelated image values) to 1 (perfectly correlated image values,
+        whether positively or negatively).
         """
-        hist_2d, _, _ = np.histogram2d(
-            self.img1_np.flatten(), 
-            self.img2_np.flatten(), 
-            bins=50
-        )
-        
-        pxy = hist_2d / float(np.sum(hist_2d))
-        px = np.sum(pxy, axis=1)
-        py = np.sum(pxy, axis=0)
-        px_py = px[:, None] * py[None, :]
-        nzs = pxy > 0
-        
-        return np.sum(pxy[nzs] * np.log(pxy[nzs] / px_py[nzs]))
+        img1_scaled = self.scale12bit(self.img1_np) # scale to 12 bit range
+        img2_scaled = self.scale12bit(self.img2_np) # scale to 12 bit range
+
+        return normalized_mutual_information(img1_scaled, img2_scaled)
     
     def calculate_ssim(self):
         """
@@ -190,29 +198,24 @@ class ImageEvaluation:
         --------
         float
             SSIM value between -1 and 1
+        
+        Note:
+        -----
+        If data_range is not specified, the range is automatically guessed based on the image data type.
+        However, for floating-point image data, this estimate yields a result double the value of the desired range,
+        as the dtype_range in skimage.util.dtype.py has defined intervals from -1 to +1. This yields an estimate of 2,
+        instead of 1, which is most often required when working with image data (as negative light intensities are nonsensical).
+        In case of working with YCbCr-like color data, note that these ranges are different per channel (Cb and Cr have double
+        the range of Y), so one cannot calculate a channel-averaged SSIM with a single call to this function, as identical ranges
+        are assumed for each channel.
+
+        To match the implementation of Wang et al., set gaussian_weights to True, sigma to 1.5, use_sample_covariance to False,
+        and specify the data_range argument.
         """
-        win_size = 7
-        ssim_values = []
-        
-        # Calculate SSIM for each direction
-        for axis in range(3):
-            # Transpose array to calculate SSIM along different axes
-            img1_transpose = np.moveaxis(self.img1_np, axis, 0)
-            img2_transpose = np.moveaxis(self.img2_np, axis, 0)
-            
-            # Calculate SSIM for each slice in current direction
-            ssim_direction = [
-                structural_similarity(
-                    img1_transpose[i], 
-                    img2_transpose[i],
-                    win_size=win_size,
-                    data_range=self.data_range
-                )
-                for i in range(img1_transpose.shape[0])
-            ]
-            ssim_values.append(np.mean(ssim_direction))
-        
-        return np.mean(ssim_values)
+        img1_scaled = self.scale12bit(self.img1_np) # scale to 12 bit range
+        img2_scaled = self.scale12bit(self.img2_np) # scale to 12 bit range
+
+        return structural_similarity(img1_scaled, img2_scaled, win_size=7, data_range=(img1_scaled.max() - img1_scaled.min()))
 
     def calculate_nrmse(self):
         """
@@ -223,8 +226,10 @@ class ImageEvaluation:
         float
             NRMSE value, smaller is better
         """
-        mse = mean_squared_error(self.img1_np.flatten(), self.img2_np.flatten())
-        return np.sqrt(mse) / (self.data_range + self.eps)
+        img1_scaled = self.scale12bit(self.img1_np) # scale to 12 bit range
+        img2_scaled = self.scale12bit(self.img2_np) # scale to 12 bit range
+
+        return normalized_root_mse(img1_scaled, img2_scaled)
 
     def calculate_smape(self):
         """
@@ -235,25 +240,30 @@ class ImageEvaluation:
         float
             SMAPE value as percentage
         """
+        img1_scaled = self.scale12bit(self.img1_np) # scale to 12 bit range
+        img2_scaled = self.scale12bit(self.img2_np) # scale to 12 bit range
+
         return np.mean(
-            np.abs(self.img1_np - self.img2_np) / 
-            (np.abs(self.img1_np) + np.abs(self.img2_np) + self.eps)
+            np.abs(img1_scaled - img2_scaled) / 
+            (np.abs(img1_scaled) + np.abs(img2_scaled) + self.eps)
         )
 
     def calculate_logac(self):
         """
-        Calculate Logarithmic Accuracy using natural log
+        Calculate Log accuracy ratio
         
         Returns:
         --------
         float
             LOGAC value
         """
-        # Ensure positive values by adding minimum value and epsilon
-        img1_positive = self.img1_np - self.img1_np.min() + self.eps
-        img2_positive = self.img2_np - self.img2_np.min() + self.eps
+        img1_scaled = self.scale12bit(self.img1_np) # scale to 12 bit range
+        img2_scaled = self.scale12bit(self.img2_np) # scale to 12 bit range
+        # # Ensure positive values by adding minimum value and epsilon
+        # img1_positive = self.img1_np - self.img1_np.min() + self.eps
+        # img2_positive = self.img2_np - self.img2_np.min() + self.eps
         
-        return np.mean(np.abs(np.log(img1_positive/img2_positive)))
+        return np.mean(np.fabs(np.log(img1_scaled/img2_scaled)))
     
     def calculate_medsymac(self):
         """
@@ -264,11 +274,13 @@ class ImageEvaluation:
         float
             MEDSYMAC value as percentage
         """
-        img1_positive = self.img1_np - self.img1_np.min() + self.eps
-        img2_positive = self.img2_np - self.img2_np.min() + self.eps
+        img1_scaled = self.scale12bit(self.img1_np) # scale to 12 bit range
+        img2_scaled = self.scale12bit(self.img2_np) # scale to 12 bit range
+        # img1_positive = self.img1_np - self.img1_np.min() + self.eps
+        # img2_positive = self.img2_np - self.img2_np.min() + self.eps
         
-        log_ratio = np.log(img1_positive/img2_positive)
-        return (np.exp(np.median(np.abs(log_ratio))) - 1)
+        log_ratio = np.log(img1_scaled/img2_scaled)
+        return np.exp(np.median(np.fabs(log_ratio))) - 1
 
     def calculate_all_metrics(self):
         """Calculate all similarity and error metrics"""
